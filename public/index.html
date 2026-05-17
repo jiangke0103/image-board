@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>东哥小站</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>分享板</h1>
+      <p class="subtitle">上传图片和视频，与所有人分享</p>
+    </header>
+
+    <!-- Upload Area -->
+    <section class="upload-section">
+      <div class="upload-zone" id="uploadZone">
+        <div class="upload-icon">+</div>
+        <p class="upload-text">点击上传或拖拽文件到此处</p>
+        <p class="upload-hint">图片 JPG/PNG/GIF/WebP ｜ 视频 MP4/MOV/AVI/WebM 等（最大 100MB）</p>
+        <input type="file" id="fileInput" accept="image/*,video/*" hidden>
+      </div>
+
+      <!-- Preview -->
+      <div class="upload-preview" id="uploadPreview" hidden>
+        <div class="preview-container">
+          <img id="previewImg" alt="预览" hidden>
+          <video id="previewVideo" controls hidden></video>
+        </div>
+        <div class="preview-info" id="previewInfo"></div>
+
+        <!-- Conversion option (shown for non-MP4 video) -->
+        <div class="convert-option" id="convertOption" hidden>
+          <label class="convert-toggle">
+            <input type="checkbox" id="convertCheck" checked>
+            <span class="toggle-label">转换为 MP4 格式（兼容所有浏览器）</span>
+          </label>
+        </div>
+
+        <!-- Conversion progress (shown during transcoding) -->
+        <div class="convert-progress" id="convertProgress" hidden>
+          <div class="convert-progress-bar">
+            <div class="convert-progress-fill" id="convertProgressFill"></div>
+          </div>
+          <p class="convert-progress-text" id="convertProgressText">准备转换...</p>
+        </div>
+
+        <div class="preview-actions" id="previewActions">
+          <button class="btn btn-cancel" id="cancelBtn">取消</button>
+          <button class="btn btn-upload" id="uploadBtn">上传</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Gallery -->
+    <section class="gallery-section">
+      <div class="gallery-header">
+        <h2>全部内容</h2>
+        <span class="count" id="fileCount">0 个文件</span>
+      </div>
+      <div class="gallery" id="gallery">
+        <div class="loading">加载中...</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Lightbox -->
+  <div class="lightbox" id="lightbox">
+    <button class="lightbox-close">&times;</button>
+    <div class="lightbox-content" id="lightboxContent"></div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script src="/script.js"></script>
+</body>
+</html>
