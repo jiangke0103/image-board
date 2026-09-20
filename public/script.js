@@ -1,162 +1,306 @@
 const API = '/api/images';
+const CONFIG_API = '/api/config';
 const UPLOAD_API = '/api/upload';
+const CHUNK_INIT_API = '/api/upload/init';
+const CHUNK_API = '/api/upload/chunk';
+const CHUNK_COMPLETE_API = '/api/upload/complete';
 
-let selectedFile = null;
-let convertedFile = null; // File after FFmpeg conversion
-let ffmpeg = null;
+const DEFAULTS = {
+  maxFileSizeMb: 4096,
+  directUploadLimitMb: 80,
+  chunkSizeMb: 48
+};
 
-// Video extensions that need conversion
 const NEEDS_CONVERT = new Set(['.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm', '.mts', '.m2ts', '.ts', '.3gp']);
+const VIDEO_EXTS = new Set(['.mp4', '.mov', '.webm', '.avi', '.mkv', '.wmv', '.flv', '.mts', '.m2ts', '.ts', '.3gp']);
 
-// DOM refs
-const gallery = document.getElementById('gallery');
-const fileCount = document.getElementById('fileCount');
-const fileInput = document.getElementById('fileInput');
-const uploadZone = document.getElementById('uploadZone');
-const uploadPreview = document.getElementById('uploadPreview');
-const previewImg = document.getElementById('previewImg');
-const previewVideo = document.getElementById('previewVideo');
-const previewInfo = document.getElementById('previewInfo');
-const previewActions = document.getElementById('previewActions');
-const cancelBtn = document.getElementById('cancelBtn');
-const uploadBtn = document.getElementById('uploadBtn');
-const convertOption = document.getElementById('convertOption');
-const convertCheck = document.getElementById('convertCheck');
-const convertProgress = document.getElementById('convertProgress');
-const convertProgressFill = document.getElementById('convertProgressFill');
-const convertProgressText = document.getElementById('convertProgressText');
-const toast = document.getElementById('toast');
-const lightbox = document.getElementById('lightbox');
-const lightboxContent = document.getElementById('lightboxContent');
-const lightboxClose = lightbox.querySelector('.lightbox-close');
+const state = {
+  selectedFile: null,
+  convertedFile: null,
+  previewUrl: '',
+  uploadId: '',
+  config: { ...DEFAULTS },
+  ffmpeg: null
+};
 
-// --- Toast ---
-function showToast(msg, type = '') {
-  toast.textContent = msg;
-  toast.className = 'toast show ' + type;
-  clearTimeout(toast._timer);
-  toast._timer = setTimeout(() => toast.classList.remove('show'), 3000);
+const refs = {
+  gallery: document.getElementById('gallery'),
+  fileCount: document.getElementById('fileCount'),
+  fileInput: document.getElementById('fileInput'),
+  uploadZone: document.getElementById('uploadZone'),
+  uploadPreview: document.getElementById('uploadPreview'),
+  previewImg: document.getElementById('previewImg'),
+  previewVideo: document.getElementById('previewVideo'),
+  previewInfo: document.getElementById('previewInfo'),
+  previewActions: document.getElementById('previewActions'),
+  cancelBtn: document.getElementById('cancelBtn'),
+  uploadBtn: document.getElementById('uploadBtn'),
+  convertOption: document.getElementById('convertOption'),
+  convertCheck: document.getElementById('convertCheck'),
+  progress: document.getElementById('convertProgress'),
+  progressFill: document.getElementById('convertProgressFill'),
+  progressText: document.getElementById('convertProgressText'),
+  toast: document.getElementById('toast'),
+  lightbox: document.getElementById('lightbox'),
+  lightboxContent: document.getElementById('lightboxContent'),
+  lightboxClose: document.querySelector('.lightbox-close'),
+  maxSizeText: document.getElementById('maxSizeText'),
+  uploadLimitText: document.getElementById('uploadLimitText'),
+  statusText: document.getElementById('statusText'),
+  canvas: document.getElementById('networkCanvas')
+};
+
+function getExt(name) {
+  const index = name.lastIndexOf('.');
+  return index >= 0 ? name.slice(index).toLowerCase() : '';
 }
 
-// --- Load files ---
-async function loadFiles() {
-  try {
-    const res = await fetch(API);
-    if (!res.ok) throw new Error('加载失败');
-    const files = await res.json();
-
-    fileCount.textContent = `${files.length} 个文件`;
-
-    if (files.length === 0) {
-      gallery.innerHTML = '<div class="empty">还没有内容，快来发第一个吧！</div>';
-      return;
-    }
-
-    gallery.innerHTML = files.map(file => {
-      const isVideo = file.type?.startsWith('video/');
-      return `
-        <div class="gallery-item" data-url="${file.url}" data-type="${file.type || ''}">
-          ${isVideo
-            ? `<video src="${file.url}" preload="metadata" muted></video><div class="play-indicator"></div>`
-            : `<img src="${file.url}" alt="" loading="lazy">`
-          }
-          <div class="meta">
-            <span>${formatSize(file.size)}</span>
-            <span>${isVideo ? '视频' : formatTime(file.uploadedAt)}</span>
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    document.querySelectorAll('.gallery-item').forEach(el => {
-      el.addEventListener('click', () => openLightbox(el.dataset.url, el.dataset.type));
-    });
-  } catch (err) {
-    gallery.innerHTML = '<div class="empty">加载失败，请确认服务器是否运行</div>';
-    showToast('加载失败', 'error');
-  }
+function isVideoFile(file) {
+  return file.type.startsWith('video/') || VIDEO_EXTS.has(getExt(file.name));
 }
 
+function formatLimit(mb) {
+  return mb >= 1024 ? `${Number((mb / 1024).toFixed(1))}GB` : `${mb}MB`;
+}
 function formatSize(bytes) {
-  if (bytes < 1024) return bytes + 'B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB';
-  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
-  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + 'GB';
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)}GB`;
 }
 
 function formatTime(iso) {
-  const d = new Date(iso);
-  const now = new Date();
-  const diff = now - d;
-  if (diff < 60000) return '刚刚';
-  if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前';
-  if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前';
-  return d.toLocaleDateString();
+  const date = new Date(iso);
+  const diff = Date.now() - date.getTime();
+  if (!Number.isFinite(diff)) return '刚刚';
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  return date.toLocaleDateString('zh-CN');
 }
 
-// --- FFmpeg.wasm Video Conversion ---
-function getExt(name) {
-  const i = name.lastIndexOf('.');
-  return i >= 0 ? name.substring(i).toLowerCase() : '';
+function showToast(message, type = '') {
+  refs.toast.textContent = message;
+  refs.toast.className = `toast show ${type}`.trim();
+  clearTimeout(refs.toast._timer);
+  refs.toast._timer = setTimeout(() => refs.toast.classList.remove('show'), 3400);
 }
 
-function needsConversion(file) {
-  if (!file.type.startsWith('video/')) return false;
-  return NEEDS_CONVERT.has(getExt(file.name));
+function setProgress(text, percent, loading = false) {
+  refs.progress.hidden = false;
+  refs.progress.classList.toggle('loading', loading);
+  refs.progressFill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  refs.progressText.textContent = text;
+  refs.previewActions.hidden = true;
+  refs.convertOption.hidden = true;
 }
 
-async function initFFmpeg() {
-  if (ffmpeg) return ffmpeg;
+function hideProgress() {
+  refs.progress.hidden = true;
+  refs.progress.classList.remove('loading');
+  refs.previewActions.hidden = false;
+}
 
-  showConvertProgress('正在加载转码引擎 (约 30MB)...', true);
-  convertProgress.classList.add('loading');
-
+async function loadConfig() {
   try {
-    const { FFmpeg: FFmpegClass } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/+esm');
-    const { toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.10/+esm');
+    const response = await fetch(CONFIG_API);
+    if (!response.ok) throw new Error('配置读取失败');
+    const config = await response.json();
+    state.config = { ...DEFAULTS, ...config };
+  } catch {
+    state.config = { ...DEFAULTS };
+  }
 
-    ffmpeg = new FFmpegClass();
+  const limitLabel = formatLimit(state.config.maxFileSizeMb);
+  refs.maxSizeText.textContent = limitLabel;
+  refs.uploadLimitText.textContent = limitLabel;
 
-    ffmpeg.on('progress', ({ progress }) => {
-      const pct = Math.min(Math.round(progress * 100), 99);
-      convertProgressFill.style.width = pct + '%';
-      convertProgressText.textContent = `转码中... ${pct}%`;
-    });
+}
+function createGalleryCard(file) {
+  const video = file.type?.startsWith('video/');
+  const card = document.createElement('article');
+  card.className = 'gallery-card';
+  card.tabIndex = 0;
+  card.dataset.url = file.url;
+  card.dataset.type = file.type || '';
 
-    await ffmpeg.load({
-      coreURL: await toBlobURL(
-        'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.js',
-        'text/javascript'
-      ),
-      wasmURL: await toBlobURL(
-        'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
-        'application/wasm'
-      ),
-    });
+  const frame = document.createElement('div');
+  frame.className = 'media-frame';
 
-    convertProgress.classList.remove('loading');
-    return ffmpeg;
-  } catch (err) {
-    convertProgress.classList.remove('loading');
-    throw err;
+  const media = document.createElement(video ? 'video' : 'img');
+  media.src = file.url;
+  media.loading = 'lazy';
+  if (video) {
+    media.muted = true;
+    media.preload = 'metadata';
+  } else {
+    media.alt = '上传的图片';
+  }
+  frame.appendChild(media);
+
+  const badge = document.createElement('span');
+  badge.className = 'media-type';
+  badge.textContent = video ? 'VIDEO' : 'IMAGE';
+  frame.appendChild(badge);
+
+  if (video) {
+    const play = document.createElement('span');
+    play.className = 'play-indicator';
+    play.setAttribute('aria-hidden', 'true');
+    frame.appendChild(play);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'media-meta';
+
+  const name = document.createElement('span');
+  name.className = 'media-name';
+  name.textContent = `${video ? '视频信号' : '图像信号'} ${getExt(file.filename || '').slice(1).toUpperCase() || ''}`.trim();
+
+  const info = document.createElement('span');
+  info.className = 'media-size';
+  info.textContent = `${formatSize(file.size)} · ${formatTime(file.uploadedAt)}`;
+
+  meta.append(name, info);
+  card.append(frame, meta);
+
+  const open = () => openLightbox(file.url, file.type || '');
+  card.addEventListener('click', open);
+  card.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      open();
+    }
+  });
+
+  return card;
+}
+
+async function loadFiles() {
+  try {
+    const response = await fetch(API);
+    if (!response.ok) throw new Error('加载失败');
+    const files = await response.json();
+    refs.fileCount.textContent = `${files.length} 个文件`;
+    refs.gallery.replaceChildren();
+
+    if (!files.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = '还没有内容，建立第一条信号吧。';
+      refs.gallery.appendChild(empty);
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    files.forEach(file => fragment.appendChild(createGalleryCard(file)));
+    refs.gallery.appendChild(fragment);
+    refs.statusText.textContent = 'NODE ONLINE';
+  } catch {
+    refs.gallery.replaceChildren();
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = '信号读取失败，请确认服务器运行状态。';
+    refs.gallery.appendChild(empty);
+    refs.statusText.textContent = 'NODE DEGRADED';
+    showToast('内容加载失败', 'error');
   }
 }
 
-async function convertToMp4(file) {
-  const f = await initFFmpeg();
+function clearPreviewUrl() {
+  if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
+  state.previewUrl = '';
+}
 
-  const inputName = 'input' + getExt(file.name);
+function handleFileSelect(file) {
+  const image = file.type.startsWith('image/');
+  const video = isVideoFile(file);
+
+  if (!image && !video) {
+    showToast('请选择图片或视频文件', 'error');
+    return;
+  }
+
+  const maxBytes = state.config.maxFileSizeMb * 1024 * 1024;
+  if (file.size > maxBytes) {
+    showToast(`文件太大（最大 ${state.config.maxFileSizeMb}MB）`, 'error');
+    return;
+  }
+
+  clearPreviewUrl();
+  state.selectedFile = file;
+  state.convertedFile = null;
+  hideProgress();
+
+  const needsConversion = video && NEEDS_CONVERT.has(getExt(file.name));
+  refs.convertOption.hidden = !needsConversion;
+
+  refs.previewImg.hidden = true;
+  refs.previewVideo.hidden = true;
+  state.previewUrl = URL.createObjectURL(file);
+
+  if (image) {
+    refs.previewImg.src = state.previewUrl;
+    refs.previewImg.hidden = false;
+  } else {
+    refs.previewVideo.src = state.previewUrl;
+    refs.previewVideo.hidden = false;
+  }
+
+  refs.previewInfo.textContent = `${file.name} · ${image ? '图片' : '视频'} · ${formatSize(file.size)}`;
+  refs.uploadZone.hidden = true;
+  refs.uploadPreview.hidden = false;
+}
+
+function resetUpload() {
+  clearPreviewUrl();
+  state.selectedFile = null;
+  state.convertedFile = null;
+  state.uploadId = '';
+  refs.fileInput.value = '';
+  refs.previewImg.removeAttribute('src');
+  refs.previewVideo.removeAttribute('src');
+  refs.previewImg.hidden = true;
+  refs.previewVideo.hidden = true;
+  refs.convertOption.hidden = true;
+  refs.uploadBtn.disabled = false;
+  refs.uploadBtn.querySelector('span').textContent = '开始上传';
+  hideProgress();
+  refs.uploadPreview.hidden = true;
+  refs.uploadZone.hidden = false;
+}
+
+async function initFFmpeg() {
+  if (state.ffmpeg) return state.ffmpeg;
+
+  setProgress('正在加载转码引擎...', 2, true);
+  const { FFmpeg: FFmpegClass } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/+esm');
+  const { toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.10/+esm');
+
+  const ffmpeg = new FFmpegClass();
+  ffmpeg.on('progress', ({ progress }) => {
+    setProgress(`转码中... ${Math.min(99, Math.round(progress * 100))}%`, progress * 100);
+  });
+
+  await ffmpeg.load({
+    coreURL: await toBlobURL('https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.js', 'text/javascript'),
+    wasmURL: await toBlobURL('https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm', 'application/wasm')
+  });
+
+  state.ffmpeg = ffmpeg;
+  return ffmpeg;
+}
+
+async function convertToMp4(file) {
+  const ffmpeg = await initFFmpeg();
+  const inputName = `input${getExt(file.name)}`;
   const outputName = 'output.mp4';
 
-  // Write input file
-  showConvertProgress('读取源文件...');
-  await f.writeFile(inputName, new Uint8Array(await file.arrayBuffer()));
+  setProgress('读取源文件...', 4);
+  await ffmpeg.writeFile(inputName, new Uint8Array(await file.arrayBuffer()));
 
-  // Convert to H.264 + AAC + faststart
-  showConvertProgress('转码中... 0%');
-  convertProgressFill.style.width = '0%';
-
-  await f.exec([
+  setProgress('转码中... 0%', 5);
+  await ffmpeg.exec([
     '-i', inputName,
     '-c:v', 'libx264',
     '-preset', 'fast',
@@ -166,197 +310,260 @@ async function convertToMp4(file) {
     outputName
   ]);
 
-  showConvertProgress('打包文件...');
-  const data = await f.readFile(outputName);
+  setProgress('打包文件...', 99);
+  const data = await ffmpeg.readFile(outputName);
+  await ffmpeg.deleteFile(inputName);
+  await ffmpeg.deleteFile(outputName);
 
-  // Cleanup FFmpeg virtual filesystem
-  await f.deleteFile(inputName);
-  await f.deleteFile(outputName);
-
-  // Create output File
-  const mp4Name = file.name.replace(/\.[^.]+$/, '.mp4');
-  return new File([data.buffer], mp4Name, { type: 'video/mp4' });
+  return new File([data.buffer], file.name.replace(/\.[^.]+$/, '.mp4'), { type: 'video/mp4' });
 }
 
-function showConvertProgress(text, loading = false) {
-  convertProgressFill.style.width = '';
-  convertProgress.hidden = false;
-  previewActions.hidden = true;
-  convertOption.hidden = true;
-  convertProgressText.textContent = text;
-  if (loading) {
-    convertProgress.classList.add('loading');
-  } else {
-    convertProgress.classList.remove('loading');
+function uploadDirect(file) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('image', file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', UPLOAD_API);
+    xhr.responseType = 'json';
+
+    xhr.upload.addEventListener('progress', event => {
+      if (!event.lengthComputable) return;
+      const percent = (event.loaded / event.total) * 100;
+      setProgress(`正在上传... ${Math.round(percent)}%`, percent);
+    });
+
+    xhr.addEventListener('load', () => {
+      const payload = xhr.response || {};
+      if (xhr.status >= 200 && xhr.status < 300) resolve(payload);
+      else reject(new Error(payload.error || '上传失败'));
+    });
+    xhr.addEventListener('error', () => reject(new Error('网络连接失败')));
+    xhr.send(formData);
+  });
+}
+
+async function readJson(response) {
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || '请求失败');
+  return payload;
+}
+
+async function uploadChunked(file, onProgress) {
+  const init = await readJson(await fetch(CHUNK_INIT_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: file.name, size: file.size, type: file.type })
+  }));
+
+  state.uploadId = init.uploadId;
+  const chunkSize = init.chunkSize;
+  const total = init.totalChunks;
+
+  for (let index = 0; index < total; index += 1) {
+    const start = index * chunkSize;
+    const end = Math.min(file.size, start + chunkSize);
+    const blob = file.slice(start, end, file.type || 'application/octet-stream');
+    const formData = new FormData();
+    formData.append('uploadId', state.uploadId);
+    formData.append('index', String(index));
+    formData.append('chunk', blob, `chunk-${index}.part`);
+
+    await readJson(await fetch(CHUNK_API, { method: 'POST', body: formData }));
+    onProgress(index + 1, total);
   }
+
+  const result = await readJson(await fetch(CHUNK_COMPLETE_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uploadId: state.uploadId })
+  }));
+  state.uploadId = '';
+  return result;
 }
 
-function hideConvertProgress() {
-  convertProgress.hidden = true;
-  convertProgress.classList.remove('loading');
-  previewActions.hidden = false;
-}
-
-// --- Upload ---
-uploadZone.addEventListener('click', () => fileInput.click());
-
-uploadZone.addEventListener('dragover', (e) => {
-  e.preventDefault();
-  uploadZone.classList.add('dragover');
+refs.uploadZone.addEventListener('click', () => refs.fileInput.click());
+refs.uploadZone.addEventListener('keydown', event => {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    refs.fileInput.click();
+  }
 });
 
-uploadZone.addEventListener('dragleave', () => {
-  uploadZone.classList.remove('dragover');
+refs.uploadZone.addEventListener('dragover', event => {
+  event.preventDefault();
+  refs.uploadZone.classList.add('dragover');
 });
 
-uploadZone.addEventListener('drop', (e) => {
-  e.preventDefault();
-  uploadZone.classList.remove('dragover');
-  const file = e.dataTransfer.files[0];
+refs.uploadZone.addEventListener('dragleave', () => refs.uploadZone.classList.remove('dragover'));
+
+refs.uploadZone.addEventListener('drop', event => {
+  event.preventDefault();
+  refs.uploadZone.classList.remove('dragover');
+  const file = event.dataTransfer.files[0];
   if (file) handleFileSelect(file);
 });
 
-fileInput.addEventListener('change', () => {
-  if (fileInput.files[0]) handleFileSelect(fileInput.files[0]);
+refs.fileInput.addEventListener('change', () => {
+  if (refs.fileInput.files[0]) handleFileSelect(refs.fileInput.files[0]);
 });
 
-function handleFileSelect(file) {
-  const isImage = file.type.startsWith('image/');
-  const isVideo = file.type.startsWith('video/');
-
-  if (!isImage && !isVideo) {
-    showToast('请选择图片或视频文件', 'error');
-    return;
+refs.cancelBtn.addEventListener('click', async () => {
+  if (state.uploadId) {
+    fetch(`/api/upload/${state.uploadId}`, { method: 'DELETE' }).catch(() => {});
   }
-  if (file.size > 100 * 1024 * 1024) {
-    showToast('文件太大（最大 100MB）', 'error');
-    return;
-  }
+  resetUpload();
+});
 
-  selectedFile = file;
-  convertedFile = null;
-  hideConvertProgress();
+refs.uploadBtn.addEventListener('click', async () => {
+  if (!state.selectedFile) return;
 
-  const ext = getExt(file.name);
-  const showConvert = isVideo && needsConversion(file);
+  let fileToUpload = state.selectedFile;
+  const shouldConvert = isVideoFile(fileToUpload) && NEEDS_CONVERT.has(getExt(fileToUpload.name)) && refs.convertCheck.checked;
 
-  // Show/hide conversion toggle
-  convertOption.hidden = !showConvert;
-
-  // Preview
-  previewImg.hidden = true;
-  previewVideo.hidden = true;
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    if (isImage) {
-      previewImg.src = e.target.result;
-      previewImg.hidden = false;
-    } else {
-      previewVideo.src = e.target.result;
-      previewVideo.hidden = false;
-    }
-
-    const type = isImage ? '图片' : '视频';
-    let info = `${file.name}  —  ${type}  ${formatSize(file.size)}`;
-    if (showConvert) info += '  —  ⚠ 建议转换为 MP4';
-    previewInfo.textContent = info;
-
-    uploadZone.hidden = true;
-    uploadPreview.hidden = false;
-  };
-  reader.readAsDataURL(file);
-}
-
-cancelBtn.addEventListener('click', resetUpload);
-
-function resetUpload() {
-  selectedFile = null;
-  convertedFile = null;
-  fileInput.value = '';
-  previewImg.src = '';
-  previewVideo.src = '';
-  convertOption.hidden = true;
-  hideConvertProgress();
-  uploadPreview.hidden = true;
-  uploadZone.hidden = false;
-}
-
-uploadBtn.addEventListener('click', async () => {
-  if (!selectedFile) return;
-
-  let fileToUpload = selectedFile;
-  const shouldConvert = needsConversion(selectedFile) && convertCheck.checked;
-
-  // Step 1: Convert video if needed
-  if (shouldConvert) {
-    try {
-      convertedFile = await convertToMp4(selectedFile);
-      fileToUpload = convertedFile;
-      showToast('转码完成，正在上传...', 'success');
-    } catch (err) {
-      console.error('Conversion failed:', err);
-      showToast('转码失败，将上传原始文件: ' + err.message, 'error');
-      fileToUpload = selectedFile;
-      hideConvertProgress();
-      return;
-    }
-  }
-
-  // Step 2: Upload
-  uploadBtn.disabled = true;
-  uploadBtn.textContent = '上传中...';
+  refs.uploadBtn.disabled = true;
+  refs.uploadBtn.querySelector('span').textContent = '传输中...';
 
   try {
-    const formData = new FormData();
-    formData.append('image', fileToUpload);
-
-    const res = await fetch(UPLOAD_API, { method: 'POST', body: formData });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || '上传失败');
+    if (shouldConvert && fileToUpload.size <= 1024 * 1024 * 1024) {
+      state.convertedFile = await convertToMp4(fileToUpload);
+      fileToUpload = state.convertedFile;
+    } else if (shouldConvert) {
+      showToast('文件超过 1GB，浏览器无法稳定转码，将上传原文件', 'error');
     }
 
-    showToast('上传成功！', 'success');
+    const directLimitBytes = state.config.directUploadLimitMb * 1024 * 1024;
+    if (fileToUpload.size <= directLimitBytes) {
+      setProgress('正在连接上传节点...', 1);
+      await uploadDirect(fileToUpload);
+    } else {
+      await uploadChunked(fileToUpload, (done, total) => {
+        const percent = (done / total) * 100;
+        setProgress(`分片传输中... ${done}/${total} · ${Math.round(percent)}%`, percent);
+      });
+    }
+
+    showToast('上传成功，信号已进入档案库', 'success');
     resetUpload();
-    loadFiles();
-  } catch (err) {
-    showToast(err.message, 'error');
-    uploadBtn.disabled = false;
-    uploadBtn.textContent = '上传';
-    hideConvertProgress();
+    await loadFiles();
+  } catch (error) {
+    console.error(error);
+    showToast(error.message || '上传失败', 'error');
+    refs.uploadBtn.disabled = false;
+    refs.uploadBtn.querySelector('span').textContent = '开始上传';
+    hideProgress();
   }
 });
 
-// --- Lightbox ---
 function openLightbox(url, type) {
-  const isVideo = type?.startsWith('video/');
-
-  if (isVideo) {
-    lightboxContent.innerHTML = `<video src="${url}" controls autoplay></video>`;
+  refs.lightboxContent.replaceChildren();
+  const video = type?.startsWith('video/');
+  const media = document.createElement(video ? 'video' : 'img');
+  media.src = url;
+  if (video) {
+    media.controls = true;
+    media.autoplay = true;
   } else {
-    lightboxContent.innerHTML = `<img src="${url}" alt="">`;
+    media.alt = '媒体预览';
   }
-
-  lightbox.classList.add('active');
+  refs.lightboxContent.appendChild(media);
+  refs.lightbox.classList.add('active');
   document.body.style.overflow = 'hidden';
 }
 
 function closeLightbox() {
-  lightbox.classList.remove('active');
-  const video = lightboxContent.querySelector('video');
+  const video = refs.lightboxContent.querySelector('video');
   if (video) video.pause();
-  lightboxContent.innerHTML = '';
+  refs.lightboxContent.replaceChildren();
+  refs.lightbox.classList.remove('active');
   document.body.style.overflow = '';
 }
 
-lightboxClose.addEventListener('click', closeLightbox);
-lightbox.addEventListener('click', (e) => {
-  if (e.target === lightbox) closeLightbox();
+refs.lightboxClose.addEventListener('click', closeLightbox);
+refs.lightbox.addEventListener('click', event => {
+  if (event.target === refs.lightbox) closeLightbox();
 });
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeLightbox();
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeLightbox();
 });
 
-// --- Init ---
-loadFiles();
+function initNetworkCanvas() {
+  const canvas = refs.canvas;
+  if (!canvas || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const context = canvas.getContext('2d');
+  if (!context) return;
+
+  let width = 0;
+  let height = 0;
+  let nodes = [];
+  let frame = 0;
+
+  function resize() {
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.floor(width * ratio);
+    canvas.height = Math.floor(height * ratio);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+    const count = Math.max(24, Math.min(70, Math.floor(width / 24)));
+    nodes = Array.from({ length: count }, () => ({
+      x: Math.random() * width,
+      y: Math.random() * height,
+      vx: (Math.random() - 0.5) * 0.18,
+      vy: (Math.random() - 0.5) * 0.18,
+      r: Math.random() * 1.2 + 0.4
+    }));
+  }
+
+  function draw() {
+    context.clearRect(0, 0, width, height);
+
+    for (const node of nodes) {
+      node.x += node.vx;
+      node.y += node.vy;
+      if (node.x < 0 || node.x > width) node.vx *= -1;
+      if (node.y < 0 || node.y > height) node.vy *= -1;
+    }
+
+    for (let i = 0; i < nodes.length; i += 1) {
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const dx = nodes[i].x - nodes[j].x;
+        const dy = nodes[i].y - nodes[j].y;
+        const distance = Math.hypot(dx, dy);
+        if (distance < 130) {
+          context.strokeStyle = `rgba(89, 238, 255, ${(1 - distance / 130) * 0.14})`;
+          context.lineWidth = 0.7;
+          context.beginPath();
+          context.moveTo(nodes[i].x, nodes[i].y);
+          context.lineTo(nodes[j].x, nodes[j].y);
+          context.stroke();
+        }
+      }
+    }
+
+    context.fillStyle = 'rgba(159, 248, 255, 0.62)';
+    for (const node of nodes) {
+      context.beginPath();
+      context.arc(node.x, node.y, node.r, 0, Math.PI * 2);
+      context.fill();
+    }
+
+    frame = requestAnimationFrame(draw);
+  }
+
+  window.addEventListener('resize', resize, { passive: true });
+  resize();
+  draw();
+  window.addEventListener('pagehide', () => cancelAnimationFrame(frame), { once: true });
+}
+
+async function bootstrap() {
+  initNetworkCanvas();
+  await loadConfig();
+  await loadFiles();
+}
+
+bootstrap();

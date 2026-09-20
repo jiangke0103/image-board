@@ -3,77 +3,139 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>东哥小站</title>
+  <meta name="theme-color" content="#050914">
+  <meta name="description" content="东哥小站 - 高速分享图片与视频的科技信号站">
+  <title>Signal Vault // 东哥小站</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div class="container">
-    <header class="header">
-      <h1>分享板</h1>
-      <p class="subtitle">上传图片和视频，与所有人分享</p>
+  <canvas id="networkCanvas" aria-hidden="true"></canvas>
+  <div class="ambient ambient-a" aria-hidden="true"></div>
+  <div class="ambient ambient-b" aria-hidden="true"></div>
+  <div class="noise" aria-hidden="true"></div>
+
+  <div class="shell">
+    <header class="hero">
+      <nav class="topbar">
+        <a class="brand" href="/" aria-label="返回首页">
+          <span class="brand-mark">H</span>
+          <span class="brand-copy">
+            <strong>SIGNAL VAULT</strong>
+            <small>HUDONG NODE / 01</small>
+          </span>
+        </a>
+        <div class="node-status">
+          <span class="status-dot"></span>
+          <span id="statusText">NODE ONLINE</span>
+        </div>
+      </nav>
+
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">IMAGE / VIDEO TRANSMISSION SYSTEM</p>
+          <h1>把信号<br><span>投向更远处</span></h1>
+          <p class="intro">图片、视频与灵感的高速投递站。拖入文件，建立连接，让每一段画面都被看见。</p>
+        </div>
+
+        <div class="hero-panel">
+          <div class="panel-corner"></div>
+          <p class="panel-label">SYSTEM CAPACITY</p>
+          <div class="capacity-value"><span id="maxSizeText">4GB</span><em>MAX</em></div>
+          <div class="capacity-line"><i></i></div>
+          <div class="capacity-meta">
+            <span>ENCRYPTED TRANSFER</span>
+            <span>CHUNKED UPLOAD</span>
+          </div>
+        </div>
+      </div>
     </header>
 
-    <!-- Upload Area -->
-    <section class="upload-section">
-      <div class="upload-zone" id="uploadZone">
-        <div class="upload-icon">+</div>
-        <p class="upload-text">点击上传或拖拽文件到此处</p>
-        <p class="upload-hint">图片 JPG/PNG/GIF/WebP ｜ 视频 MP4/MOV/AVI/WebM 等（最大 100MB）</p>
-        <input type="file" id="fileInput" accept="image/*,video/*" hidden>
-      </div>
-
-      <!-- Preview -->
-      <div class="upload-preview" id="uploadPreview" hidden>
-        <div class="preview-container">
-          <img id="previewImg" alt="预览" hidden>
-          <video id="previewVideo" controls hidden></video>
-        </div>
-        <div class="preview-info" id="previewInfo"></div>
-
-        <!-- Conversion option (shown for non-MP4 video) -->
-        <div class="convert-option" id="convertOption" hidden>
-          <label class="convert-toggle">
-            <input type="checkbox" id="convertCheck" checked>
-            <span class="toggle-label">转换为 MP4 格式（兼容所有浏览器）</span>
-          </label>
-        </div>
-
-        <!-- Conversion progress (shown during transcoding) -->
-        <div class="convert-progress" id="convertProgress" hidden>
-          <div class="convert-progress-bar">
-            <div class="convert-progress-fill" id="convertProgressFill"></div>
+    <main>
+      <section class="upload-card glass-panel">
+        <div class="section-head">
+          <div>
+            <p class="section-index">01 / TRANSMIT</p>
+            <h2>新建传输</h2>
           </div>
-          <p class="convert-progress-text" id="convertProgressText">准备转换...</p>
+          <span class="section-note">拖拽或点击选择文件</span>
         </div>
 
-        <div class="preview-actions" id="previewActions">
-          <button class="btn btn-cancel" id="cancelBtn">取消</button>
-          <button class="btn btn-upload" id="uploadBtn">上传</button>
+        <div class="upload-zone" id="uploadZone" role="button" tabindex="0" aria-label="选择要上传的图片或视频">
+          <div class="scan-line" aria-hidden="true"></div>
+          <div class="upload-glyph">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+              <path d="M24 34V10m0 0-8 8m8-8 8 8M10 32v5a3 3 0 0 0 3 3h22a3 3 0 0 0 3-3v-5"/>
+            </svg>
+          </div>
+          <p class="upload-text">点击上传或拖拽文件到此处</p>
+          <p class="upload-hint">JPG / PNG / GIF / WebP / MP4 / MOV / AVI / MKV / WebM</p>
+          <p class="upload-limit">单文件最大 <strong id="uploadLimitText">4GB</strong> · 大文件自动分片传输</p>
+          <input type="file" id="fileInput" accept="image/*,video/*" hidden>
         </div>
-      </div>
-    </section>
 
-    <!-- Gallery -->
-    <section class="gallery-section">
-      <div class="gallery-header">
-        <h2>全部内容</h2>
-        <span class="count" id="fileCount">0 个文件</span>
-      </div>
-      <div class="gallery" id="gallery">
-        <div class="loading">加载中...</div>
-      </div>
-    </section>
+        <div class="upload-preview" id="uploadPreview" hidden>
+          <div class="preview-shell">
+            <div class="preview-container">
+              <img id="previewImg" alt="文件预览" hidden>
+              <video id="previewVideo" controls hidden></video>
+            </div>
+            <div class="preview-side">
+              <p class="preview-kicker">READY TO TRANSMIT</p>
+              <div class="preview-info" id="previewInfo"></div>
+
+              <div class="convert-option" id="convertOption" hidden>
+                <label class="convert-toggle">
+                  <input type="checkbox" id="convertCheck" checked>
+                  <span class="toggle-ui"></span>
+                  <span class="toggle-label">转换为 MP4 格式</span>
+                </label>
+              </div>
+
+              <div class="convert-progress" id="convertProgress" hidden>
+                <div class="progress-track">
+                  <div class="progress-fill" id="convertProgressFill"></div>
+                </div>
+                <p class="progress-text" id="convertProgressText">准备转换...</p>
+              </div>
+
+              <div class="preview-actions" id="previewActions">
+                <button class="btn btn-ghost" id="cancelBtn" type="button">取消</button>
+                <button class="btn btn-primary" id="uploadBtn" type="button">
+                  <span>开始上传</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="gallery-section">
+        <div class="section-head gallery-head">
+          <div>
+            <p class="section-index">02 / ARCHIVE</p>
+            <h2>全部内容</h2>
+          </div>
+          <span class="count" id="fileCount">0 个文件</span>
+        </div>
+        <div class="gallery" id="gallery">
+          <div class="loading">正在读取信号...</div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>HUDONG / SIGNAL VAULT</span>
+      <span>TRANSFER STATUS: <b>ACTIVE</b></span>
+    </footer>
   </div>
 
-  <!-- Lightbox -->
-  <div class="lightbox" id="lightbox">
-    <button class="lightbox-close">&times;</button>
+  <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="媒体预览">
+    <button class="lightbox-close" type="button" aria-label="关闭预览">&times;</button>
     <div class="lightbox-content" id="lightboxContent"></div>
   </div>
 
-  <!-- Toast -->
-  <div class="toast" id="toast"></div>
-
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/script.js"></script>
 </body>
 </html>
